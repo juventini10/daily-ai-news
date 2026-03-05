@@ -21,7 +21,7 @@ if __name__ == "__main__":
         print("❌ 错误：未设置 FEISHU_WEBHOOK Secret！", file=sys.stderr)
         sys.exit(1)
     
-    content = get_news(os.getenv("RSS_URL", "https://www.jiqizhixin.com/rss"))
+    content = get_news(os.getenv("RSS_URL", "https://rsshub.app/tophub/ai"))
     
     # 构造飞书交互式卡片（避免纯文本截断）
     payload = {
