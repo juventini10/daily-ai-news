@@ -135,8 +135,9 @@ if __name__ == "__main__":
     try:
         resp = requests.post(webhook, json=payload, timeout=10)
         if resp.status_code == 200 and resp.json().get("code") == 0:
-            print(f"✅ 推送成功！{len(final_items)}条24h内新闻（含摘要）")
-            sys.exit(0)
+    news_count = content.count("**[")  # ✅ 安全估算条数（基于已生成的content）
+    print(f"✅ 推送成功！{news_count}条24h内新闻（含摘要）已发送至飞书")
+    sys.exit(0)
         else:
             print(f"❌ 推送失败: {resp.text}", file=sys.stderr)
             sys.exit(1)
