@@ -1,43 +1,80 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import requests, re, os, sys
-from datetime import datetime
+import feedparser, re, os, sys
+from datetime import datetime, timedelta, timezone
 
 def get_news():
-    """聚合多个国内可访问源，智能过滤非AI内容"""
+    """严格24小时新闻过滤｜自动跳过无时间/旧文章"""
     sources = [
-        ("少数派", "https://sspai.com/feed"),
-        ("36氪", "https://36kr.com/feed"),
-        ("知乎AI话题", "https://www.zhihu.com/rss")
+        ("36氪AI", "https://36kr.com/feed"),
+        ("IT之家AI", "https://www.ithome.com/feed"),
+        ("雷锋网", "https://www.leiphone.com/feed"),
+        ("量子位", "https://www.qbitai.com/feed"),
+        ("机器之心", "https://www.jiqizhixin.com/rss")
     ]
     
-    all_items = []
-    headers = {'User-Agent': 'Mozilla/5.0 (compatible; GitHubActions/1.0; +https://github.com/actions)'}
+    ai_keywords = ['ai', '人工智能', '大模型', '机器学习', '深度学习', 'aigc', '生成式', 
+                  '芯片', 'gpu', 'llm', '自动驾驶', '计算机视觉', 'nlp', '语音识别']
+    
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=24)  # 24小时前的UTC时间
+    valid_items = []
     
     for name, url in sources:
         try:
-            resp = requests.get(url, headers=headers, timeout=8, verify=False)
-            resp.encoding = 'utf-8'
-            # 提取<title>标签内容（简化版RSS解析）
-            titles = re.findall(r'<title>([^<]+)</title>', resp.text)
-            links = re.findall(r'<link[^>]*>(https?://[^<]+)</link>', resp.text)
-            # 合并标题+链接（跳过频道标题）
-            for i in range(1, min(len(titles), len(links))):
-                title = titles[i].strip()
-                # 智能过滤：保留含AI关键词的内容
-                if any(kw in title.lower() for kw in ['ai', '人工智能', '大模型', '机器学习', '深度学习', '算法']):
-                    all_items.append(f"[{title}]({links[i]}) | 来源：{name}")
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                # === 1. 严格时间验证（核心！）===
+                pub_time = None
+                # 优先用published，其次updated
+                for time_attr in ['published_parsed', 'updated_parsed']:
+                    if hasattr(entry, time_attr) and getattr(entry, time_attr):
+                        t = getattr(entry, time_attr)
+                        try:
+                            pub_time = datetime(t.tm_year, t.tm_mon, t.tm_mday, 
+                                              t.tm_hour, t.tm_min, t.tm_sec, tzinfo=timezone.utc)
+                            break
+                        except: continue
+                
+                # 跳过无时间/超时文章
+                if not pub_time or pub_time < cutoff or pub_time > now_utc:
+                    continue
+                
+                # === 2. 标题清洗 + 关键词过滤 ===
+                title = re.sub(r'[\r\n\t]+', ' ', entry.title).strip()
+                if len(title) < 15: continue  # 过滤标题过短
+                if any(skip in title.lower() for skip in ['rss', '订阅', '公告', '招聘']):
+                    continue
+                if not any(kw in title.lower() for kw in ai_keywords):
+                    continue
+                
+                # === 3. 生成带时效标记的内容 ===
+                hours_ago = int((now_utc - pub_time).total_seconds() // 3600)
+                time_tag = f"🔥{hours_ago}h" if hours_ago < 2 else f"⏰{hours_ago}h"
+                valid_items.append({
+                    'time': pub_time,
+                    'content': f"{time_tag} [{title}]({entry.link}) | {name}"
+                })
         except Exception as e:
-            print(f"⚠️ {name}源失败: {str(e)[:50]}")
+            print(f"⚠️ {name}解析失败: {str(e)[:40]}")
     
-    # 去重 + 截取前5条
-    unique_items = list(dict.fromkeys(all_items))[:5]
+    # === 4. 按时间倒序 + 去重 ===
+    valid_items.sort(key=lambda x: x['time'], reverse=True)
+    seen = set()
+    final_items = []
+    for item in valid_items:
+        key = re.sub(r'\[.*?\]\(.*?\)', '', item['content']).strip()[:60]
+        if key not in seen and len(final_items) < 5:
+            seen.add(key)
+            final_items.append(item['content'])
     
-    if not unique_items:
-        return "🔍 今日暂无AI相关资讯（已扫描少数派/36氪/知乎）\n💡 尝试关键词：大模型、芯片、AIGC"
+    # === 5. 生成结果 ===
+    if not final_items:
+        return ("🔍 今日暂无24小时内AI新闻（已扫描5大源）\n"
+                "💡 可能原因：节假日/源更新延迟 | 下次推送将自动补全")
     
-    content = "**✨ 今日AI精选（智能聚合）**\n" + "\n".join(f"{i+1}. {item}" for i, item in enumerate(unique_items))
-    content += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')} | GitHub Actions自动推送"
+    content = "**📰 今日AI快讯（严格24小时内·实时更新）**\n" + "\n".join(final_items)
+    content += f"\n\n✅ 时效验证：仅含{cutoff.strftime('%m-%d %H:%M')}后发布内容"
     return content
 
 if __name__ == "__main__":
@@ -47,21 +84,17 @@ if __name__ == "__main__":
         sys.exit(1)
     
     content = get_news()
-    
-    # 飞书消息（简化版，避免卡片格式问题）
-    payload = {
-        "msg_type": "text",
-        "content": {"text": content}
-    }
+    payload = {"msg_type": "text", "content": {"text": content}}
     
     try:
         resp = requests.post(webhook, json=payload, timeout=10)
         if resp.status_code == 200 and resp.json().get("code") == 0:
-            print("✅ 飞书推送成功！")
+            count = content.count("http")
+            print(f"✅ 推送成功！{len([l for l in content.split('\\n') if 'http' in l])}条24h内新闻")
             sys.exit(0)
         else:
             print(f"❌ 推送失败: {resp.text}", file=sys.stderr)
             sys.exit(1)
     except Exception as e:
-        print(f"⚠️ 网络异常: {str(e)}", file=sys.stderr)
+        print(f"⚠️ 异常: {str(e)}", file=sys.stderr)
         sys.exit(1)
