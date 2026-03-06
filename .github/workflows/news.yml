@@ -20,3 +20,4 @@ jobs:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           RSS_URL: "https://www.jiqizhixin.com/rss"
         run: python fetch_news.py
+# Wake up schedule 20260306
